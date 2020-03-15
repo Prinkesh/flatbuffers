@@ -280,6 +280,47 @@ class GoGenerator : public BaseGenerator {
     code += NumToString(field.value.offset) + "))\n}\n";
   }
 
+  std::string GenComment2( const FieldDef &field) {
+      std::string comment;
+      const auto &comment_lines = field.doc_comment;
+      for (auto comment_line = comment_lines.cbegin(); comment_line != comment_lines.cend(); ++comment_line) {
+           comment.append(*comment_line);
+      }
+      return comment;
+  }
+
+  // Get the value of a table's scalar.
+  void GetScalarFieldOfTableToKeys(const StructDef &struct_def,
+                             const FieldDef &field,
+                             std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    std::string getter = GenGetter(field.value.type);
+    GenReceiver(struct_def, code_ptr);
+    code += " GetKeysOf" + MakeCamel(field.name);
+    code += "() map[string]interface{} {" ; //+ map[string]TypeName(field) + " ";
+    code += "\n\t m := make(map[string]interface{})";
+    code += "\n\t m[\"type\"] = \""+ TypeName(field)+"\"";
+    std::string attrcode = "";
+    if (GenAttributesOfField(struct_def, field, &attrcode)) {
+        code += "\n\t m[\"attributes\"] = rcv.GetAttibutesOf" + MakeCamel(field.name) + "()";
+    }
+    std::string comment = GenComment2( field);
+    if (comment.size() > 0) { 
+        code += "\n\t m[\"description\"] = \"" + comment + "\"";
+    }
+
+
+    code += "\n\t return m";
+    code += "}\n\n";
+
+    code += attrcode;
+    /*
+    code += OffsetPrefix(field) + "\t\treturn " + getter;
+    code += "(o + rcv._tab.Pos)\n\t}\n";
+    code += "\treturn " + GenConstant(field) + "\n";
+    code += "}\n\n";*/
+  }
+
   // Get the value of a table's scalar.
   void GetScalarFieldOfTable(const StructDef &struct_def,
                              const FieldDef &field,
@@ -312,9 +353,41 @@ class GoGenerator : public BaseGenerator {
     code += "\tobj.Init(rcv._tab.Bytes, rcv._tab.Pos+";
     code += NumToString(field.value.offset) + ")";
     code += "\n\treturn obj\n";
-    code += "}\n";
+    code += "\n}\n";
   }
 
+  bool GenAttributesOfField(const StructDef &struct_def,
+                            const FieldDef &field,
+                            std::string *code_ptr) {
+
+    if (!field.attributes.dict.size()) {
+        return false;
+    }
+
+    std::string &code = *code_ptr;
+    std::string getter = GenGetter(field.value.type);
+    GenReceiver(struct_def, code_ptr);
+    code += " GetAttibutesOf" + MakeCamel(field.name);
+    code += "() map[string]interface{} {" ; //+ map[string]TypeName(field) + " ";
+    code += "\n\t m := make(map[string]interface{})";
+
+    for (auto v: field.attributes.dict) {
+        code += "\n\t m[\""+v.first+"\"] = \""+ v.second->constant+"\"";
+    }
+    code += "\n\t return m";
+    code += "\n}\n\n";
+    return true;
+/*
+    auto attr = field.attributes.Lookup("skip_generator");
+    if (attr == nullptr) {
+        //mapGetter += "\n\tAttribute " + std::to_string(int(field.attributes.dict.size())); 
+        mapGetter += "\n\t " + accessor;
+    }
+
+ */
+  }
+
+ 
   // Get a struct by initializing an existing struct.
   // Specific to Table.
   void GetStructFieldOfTable(const StructDef &struct_def,
@@ -338,6 +411,39 @@ class GoGenerator : public BaseGenerator {
     code += "\t\treturn obj\n\t}\n\treturn nil\n";
     code += "}\n\n";
   }
+
+  // Get a struct by initializing an existing struct.
+  // Specific to Table.
+  void GetStructFieldOfTableToMap(const StructDef &struct_def,
+                             const FieldDef &field,
+                             std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    GenReceiver(struct_def, code_ptr);
+    code += " GetMapOf" + MakeCamel(field.name) +"()";
+    code += " map[string]interface{} {";
+    code += "\n\tvar p "+ TypeName(field);
+    code += "\n\tk := rcv." + MakeCamel(field.name) + "(&p)";
+    code += "\n\treturn k.GetMap()";
+    code += "\n}\n\n";
+    /*
+    code += "(obj *";
+    code += TypeName(field);
+    code += ") *" + TypeName(field) + " " + OffsetPrefix(field);
+    if (field.value.type.struct_def->fixed) {
+      code += "\t\tx := o + rcv._tab.Pos\n";
+    } else {
+      code += "\t\tx := rcv._tab.Indirect(o + rcv._tab.Pos)\n";
+    }
+    code += "\t\tif obj == nil {\n";
+    code += "\t\t\tobj = new(" + TypeName(field) + ")\n";
+    code += "\t\t}\n";
+    code += "\t\tobj.Init(rcv._tab.Bytes, x)\n";
+    code += "\t\treturn obj\n\t}\n\treturn nil\n";
+    code += "}\n\n";*/
+  }
+
+
+
 
   // Get the value of a string.
   void GetStringField(const StructDef &struct_def,
@@ -387,6 +493,78 @@ class GoGenerator : public BaseGenerator {
     code += "\t\treturn true\n\t}\n";
     code += "\treturn false\n";
     code += "}\n\n";
+  }
+
+  void GetMemberOfVectorOfStructToMap(const StructDef &struct_def,
+                                 const FieldDef &field,
+                                 std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    //auto vectortype = field.value.type.VectorType();
+
+    GenReceiver(struct_def, code_ptr);
+    code += " GetMapOf" + MakeCamel(field.name) + "() ";
+    code += " []map[string]interface{} {";
+    code += "\n\tvar p " + TypeName(field);
+    code += "\n\tarr:= make([]map[string]interface{}, rcv." + MakeCamel(field.name) + "Length())";
+    code += "\n\tfor index := 0; index < rcv." + MakeCamel(field.name)+"Length(); index++ {";
+    code += "\n\t\t_ = rcv."+MakeCamel(field.name) + "(&p , index)";
+    code += "\n\t\tkk := p.GetMap()";
+    code += "\n\t\tarr[index] = kk";
+    code += "\n\t}";
+    code += "\n\treturn arr";
+    code += "\n}\n\n";
+  }
+
+  void GetMemberOfVectorOfStructToKeys(const StructDef &struct_def,
+                                 const FieldDef &field,
+                                 std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    //auto vectortype = field.value.type.VectorType();
+
+    GenReceiver(struct_def, code_ptr);
+    code += " GetKeysOf" + MakeCamel(field.name) + "() ";
+    code += " map[string]interface{} {";
+    code += "\n\tvar p " + TypeName(field);
+    code += "\n\tm := make(map[string]interface{})";
+    code += "\n\t m[\"type\"] = \"vector\"";
+    code += "\n\t m[\"properties\"] = p.GetKeys()";
+    std::string attrcode = "";
+    if (GenAttributesOfField(struct_def, field, &attrcode)) {
+        code += "\n\t m[\"attributes\"] = rcv.GetAttibutesOf" + MakeCamel(field.name) + "()";
+    }
+
+    std::string comment = GenComment2( field);
+    if (comment.size() > 0) { 
+        code += "\n\t m[\"description\"] = \"" + comment + "\"";
+    }
+
+
+    code += "\n\t return m";
+    code += "}\n\n";
+
+    code += attrcode;
+
+  }
+
+
+  void GetMemberOfVectorOfNonStructToMap(const StructDef &struct_def,
+                                 const FieldDef &field,
+                                 std::string *code_ptr) {
+    std::string &code = *code_ptr;
+    //auto vectortype = field.value.type.VectorType();
+
+    GenReceiver(struct_def, code_ptr);
+    code += " GetMapOf" + MakeCamel(field.name) + "() ";
+    code += " []interface{} {";
+    //code += "\n\tvar p " + TypeName(field);
+    code += "\n\tarr:= make([]interface{}, rcv." + MakeCamel(field.name) + "Length())";
+    code += "\n\tfor index := 0; index < rcv." + MakeCamel(field.name)+"Length(); index++ {";
+    code += "\n\t\tk := rcv."+MakeCamel(field.name) + "(index)";
+    //code += "\n\t\tkk := p.GetMap()";
+    code += "\n\t\tarr[index] = k";
+    code += "\n\t}";
+    code += "\n\treturn arr";
+    code += "\n}\n\n";
   }
 
   // Get the value of a vector's non-struct member. Uses a named return
@@ -553,29 +731,69 @@ class GoGenerator : public BaseGenerator {
 
   // Generate a struct field getter, conditioned on its child type(s).
   void GenStructAccessor(const StructDef &struct_def,
-                         const FieldDef &field, std::string *code_ptr) {
+                         const FieldDef &field, std::string *code_ptr,
+                         std::string *metaCode,
+                         std::string *jsonMapCode) {
     GenComment(field.doc_comment, code_ptr, nullptr, "");
+
+    std::string &mapGetter = *metaCode;
+    std::string &jsonCode = *jsonMapCode;
+//    std::string *&mapGetterPtr = &mapGetter;
+
+
+    std::string accessor = "";
+    std::string accessor_json = "";
+
+    //std::string &c = *code_ptr;
+    //c+="Here " + struct_def.name + '\n';
+    accessor = "m[\""+ field.name +"\"] = rcv." + MakeCamel(field.name)+"()";
+
     if (IsScalar(field.value.type.base_type)) {
       if (struct_def.fixed) {
+         // c+= "IsScalar fixed\n";
         GetScalarFieldOfStruct(struct_def, field, code_ptr);
       } else {
+          //c+= "IsScalar No fixed\n";
+        GetScalarFieldOfTableToKeys(struct_def, field, code_ptr);
         GetScalarFieldOfTable(struct_def, field, code_ptr);
+        accessor_json = "m[\""+ field.name +"\"] = rcv.GetKeysOf" + MakeCamel(field.name)+"()";
       }
     } else {
       switch (field.value.type.base_type) {
         case BASE_TYPE_STRUCT:
           if (struct_def.fixed) {
+          //c+= "Struct fixed\n";
+
             GetStructFieldOfStruct(struct_def, field, code_ptr);
           } else {
+              //c+= "Table Fixed\n";
+            accessor = "m[\""+ field.name +"\"] = rcv.GetMapOf" + MakeCamel(field.name)+"()";
+
+            GetStructFieldOfTableToMap(struct_def, field, code_ptr);
             GetStructFieldOfTable(struct_def, field, code_ptr);
           }
           break;
-        case BASE_TYPE_STRING: GetStringField(struct_def, field, code_ptr); break;
+        case BASE_TYPE_STRING: {
+                                   //c+="String Field\n";
+                                   accessor = "m[\""+ field.name +"\"] = string(rcv." + MakeCamel(field.name)+"())";
+                                   GetStringField(struct_def, field, code_ptr); break;
+                               }
         case BASE_TYPE_VECTOR: {
           auto vectortype = field.value.type.VectorType();
           if (vectortype.base_type == BASE_TYPE_STRUCT) {
-            GetMemberOfVectorOfStruct(struct_def, field, code_ptr);
+              accessor_json = "m[\""+ field.name +"\"] = rcv.GetKeysOf" + MakeCamel(field.name)+"()";
+              //c+="Vector Type 1 \n";
+              accessor = "m[\""+ field.name +"\"] = rcv.GetMapOf" + MakeCamel(field.name)+"()";
+
+              GetMemberOfVectorOfStructToKeys(struct_def, field, code_ptr);
+              GetMemberOfVectorOfStructToMap(struct_def, field, code_ptr);
+              GetMemberOfVectorOfStruct(struct_def, field, code_ptr);
           } else {
+              //c+= "VectorType 2\n";
+              accessor = "m[\""+ field.name +"\"] = rcv.GetMapOf" + MakeCamel(field.name)+"()";
+
+              GetMemberOfVectorOfNonStructToMap(struct_def, field, code_ptr);
+
             GetMemberOfVectorOfNonStruct(struct_def, field, code_ptr);
           }
           break;
@@ -584,12 +802,25 @@ class GoGenerator : public BaseGenerator {
         default: FLATBUFFERS_ASSERT(0);
       }
     }
+    auto attr = field.attributes.Lookup("skip_generator");
+    if (attr == nullptr) {
+        //mapGetter += "\n\tAttribute " + std::to_string(int(field.attributes.dict.size())); 
+        mapGetter += "\n\t " + accessor;
+    }
+    if (accessor_json.size() > 1 ) {
+        jsonCode += "\n\t" + accessor_json;
+    }
+    //mapGetter += "\n}\n\n";
+
     if (field.value.type.base_type == BASE_TYPE_VECTOR) {
+      //  c+="getveclen\n";
       GetVectorLen(struct_def, field, code_ptr);
       if (field.value.type.element == BASE_TYPE_UCHAR) {
+        //  c+="getubyte\n";
         GetUByteSlice(struct_def, field, code_ptr);
       }
     }
+    //mapGetter;
   }
 
   // Mutate the value of a struct's scalar.
@@ -697,14 +928,35 @@ class GoGenerator : public BaseGenerator {
     GenTableAccessor(struct_def, code_ptr);
 
     // Generate struct fields accessors
+    std::string metaCode = "";
+    GenReceiver(struct_def, &metaCode);
+    metaCode += " GetMap() map[string]interface{} {";
+    metaCode += "\n\t m := make(map[string]interface{})";
+
+    std::string jsonCode = "";
+    GenReceiver(struct_def, &jsonCode);
+    jsonCode += " GetKeys() map[string]interface{} {";
+    jsonCode += "\n\t m := make(map[string]interface{})";
+
     for (auto it = struct_def.fields.vec.begin();
          it != struct_def.fields.vec.end(); ++it) {
       auto &field = **it;
       if (field.deprecated) continue;
 
-      GenStructAccessor(struct_def, field, code_ptr);
+
+
+      GenStructAccessor(struct_def, field, code_ptr, &metaCode, &jsonCode);
       GenStructMutator(struct_def, field, code_ptr);
     }
+    std::string &c = *code_ptr;
+    c+= metaCode;
+    c+= "\n\t return m";
+    c+= "\n}\n\n";
+
+    c+= jsonCode;
+    c+= "\n\t return m";
+    c+= "\n}\n\n";
+
 
     // Generate builders
     if (struct_def.fixed) {
